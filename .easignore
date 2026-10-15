@@ -1,0 +1,12 @@
+node_modules/
+.expo/
+.eas/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Pastas nativas (geradas pelo prebuild)
+android/
+ios/
+EOF
