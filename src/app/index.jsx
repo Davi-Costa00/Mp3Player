@@ -5,7 +5,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -19,6 +18,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 const STORAGE_KEY = "player-de-musica-native";
 
@@ -75,6 +75,57 @@ const MP3_MIME_TYPES = new Set([
   "audio/mpeg3",
   "audio/x-mpeg-3",
 ]);
+
+function isValidId(value) {
+  return (
+    (typeof value === "string" && value.length > 0) ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+function normalizeSongs(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (song) =>
+        song &&
+        typeof song === "object" &&
+        isValidId(song.id) &&
+        typeof song.uri === "string" &&
+        song.uri.length > 0 &&
+        typeof song.name === "string" &&
+        song.name.length > 0,
+    )
+    .map((song) => ({
+      ...song,
+      id: String(song.id),
+      displayName:
+        typeof song.displayName === "string"
+          ? song.displayName
+          : song.name.replace(/\.mp3$/i, ""),
+      addedAt: Number.isFinite(song.addedAt) ? song.addedAt : 0,
+    }));
+}
+
+function normalizePlaylists(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (playlist) =>
+        playlist &&
+        typeof playlist === "object" &&
+        isValidId(playlist.id) &&
+        typeof playlist.name === "string" &&
+        playlist.name.trim().length > 0,
+    )
+    .map((playlist) => ({
+      ...playlist,
+      id: String(playlist.id),
+      songIds: Array.isArray(playlist.songIds)
+        ? playlist.songIds.filter(isValidId).map(String)
+        : [],
+    }));
+}
 
 function formatTime(milliseconds = 0) {
   const totalSeconds = Math.floor(Math.max(milliseconds, 0) / 1000);
@@ -355,15 +406,15 @@ export default function App() {
     positionMillis: 0,
     durationMillis: 0,
   });
-  const [volume, setVolume] = useState(0.75);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [nameDialog, setNameDialog] = useState(null);
   const [nameInput, setNameInput] = useState("");
   const [status, setStatus] = useState("");
   const [finishedPlayback, setFinishedPlayback] = useState(null);
   const [progressWidth, setProgressWidth] = useState(0);
-  const volumeRef = useRef(volume);
+  const volumeRef = useRef(1);
   const soundRef = useRef(null);
+  const playbackStatusSubscriptionRef = useRef(null);
   const currentSongRef = useRef(currentSong);
   const currentQueueRef = useRef([]);
   const settingsRef = useRef(settings);
@@ -421,8 +472,8 @@ export default function App() {
       try {
         await setAudioModeAsync({
           playsInSilentMode: true,
-          shouldPlayInBackground: false,
-          interruptionMode: "duckOthers",
+          shouldPlayInBackground: true,
+          interruptionMode: "doNotMix",
         });
       } catch (error) {
         if (mounted) {
@@ -433,17 +484,37 @@ export default function App() {
         const saved = await AsyncStorage.getItem(STORAGE_KEY);
         if (saved && mounted) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed.songs)) setSongs(parsed.songs);
-          if (Array.isArray(parsed.playlists)) setPlaylists(parsed.playlists);
-          if (parsed.settings && typeof parsed.settings === "object") {
-            setSettings({
-              ...DEFAULT_SETTINGS,
-              ...parsed.settings,
-              shuffle:
-                parsed.settings.autoAdvance && parsed.settings.shuffle
-                  ? false
-                  : Boolean(parsed.settings.shuffle),
-            });
+          if (parsed && typeof parsed === "object") {
+            if (Array.isArray(parsed.songs)) {
+              const normalizedSongs = normalizeSongs(parsed.songs);
+              setSongs(normalizedSongs);
+              if (normalizedSongs.length !== parsed.songs.length) {
+                setStatus("Algumas músicas salvas estavam inválidas e foram ignoradas.");
+              }
+            }
+            if (Array.isArray(parsed.playlists)) {
+              const normalizedPlaylists = normalizePlaylists(parsed.playlists);
+              setPlaylists(normalizedPlaylists);
+              if (normalizedPlaylists.length !== parsed.playlists.length) {
+                setStatus("Algumas playlists salvas estavam inválidas e foram ignoradas.");
+              }
+            }
+            if (parsed.settings && typeof parsed.settings === "object") {
+              const savedSettings = parsed.settings;
+              const autoAdvance =
+                typeof savedSettings.autoAdvance === "boolean"
+                  ? savedSettings.autoAdvance
+                  : DEFAULT_SETTINGS.autoAdvance;
+              setSettings({
+                ...DEFAULT_SETTINGS,
+                autoAdvance,
+                shuffle: savedSettings.shuffle === true && !autoAdvance,
+                lightMode:
+                  typeof savedSettings.lightMode === "boolean"
+                    ? savedSettings.lightMode
+                    : DEFAULT_SETTINGS.lightMode,
+              });
+            }
           }
         }
       } catch (error) {
@@ -458,8 +529,12 @@ export default function App() {
     loadData();
     return () => {
       mounted = false;
+      playbackStatusSubscriptionRef.current?.remove();
+      playbackStatusSubscriptionRef.current = null;
       if (soundRef.current) {
         try {
+          soundRef.current.setActiveForLockScreen(false);
+          soundRef.current.pause();
           soundRef.current.remove();
         } catch (error) {
           console.warn("Não foi possível liberar o áudio:", error);
@@ -498,6 +573,10 @@ export default function App() {
         if (soundRef.current) {
           const previousSound = soundRef.current;
           soundRef.current = null;
+          playbackStatusSubscriptionRef.current?.remove();
+          playbackStatusSubscriptionRef.current = null;
+          previousSound.setActiveForLockScreen(false);
+          previousSound.pause();
           previousSound.remove();
         }
         currentSongRef.current = song;
@@ -508,7 +587,17 @@ export default function App() {
           { updateInterval: 500, volume: volumeRef.current },
         );
         soundRef.current = player;
-        player.addListener("playbackStatusUpdate", handlePlaybackStatus);
+        playbackStatusSubscriptionRef.current = player.addListener(
+          "playbackStatusUpdate",
+          (playbackStatus) => {
+            if (soundRef.current === player) {
+              handlePlaybackStatus(playbackStatus);
+            }
+          },
+        );
+        player.setActiveForLockScreen(true, {
+          title: song.displayName || song.name,
+        });
         player.play();
         setStatus("");
       } catch (error) {
@@ -770,12 +859,25 @@ export default function App() {
           style: "destructive",
           onPress: async () => {
             try {
-              if (currentSong?.id === song.id && soundRef.current) {
-                soundRef.current.remove();
+              const activeSong = currentSongRef.current;
+              const isActiveSong =
+                activeSong &&
+                (String(activeSong.id) === String(song.id) ||
+                  activeSong.uri === song.uri);
+              if (isActiveSong && soundRef.current) {
+                const player = soundRef.current;
                 soundRef.current = null;
+                playbackStatusSubscriptionRef.current?.remove();
+                playbackStatusSubscriptionRef.current = null;
+                player.setActiveForLockScreen(false);
                 currentSongRef.current = null;
                 setCurrentSong(null);
                 setPlayback({ isPlaying: false, positionMillis: 0, durationMillis: 0 });
+                try {
+                  player.pause();
+                } finally {
+                  player.remove();
+                }
               }
               await FileSystem.deleteAsync(song.uri, { idempotent: true });
             } catch (error) {
@@ -834,19 +936,6 @@ export default function App() {
       await soundRef.current.seekTo((ratio * playback.durationMillis) / 1000);
     } catch (error) {
       setStatus(`Não foi possível alterar a posição da música: ${error.message}`);
-    }
-  };
-
-  const changeVolume = async (nextVolume) => {
-    const boundedVolume = Math.min(1, Math.max(0, nextVolume));
-    volumeRef.current = boundedVolume;
-    setVolume(boundedVolume);
-    if (soundRef.current) {
-      try {
-        soundRef.current.volume = boundedVolume;
-      } catch (error) {
-        setStatus(`Não foi possível alterar o volume: ${error.message}`);
-      }
     }
   };
 
@@ -1097,20 +1186,6 @@ export default function App() {
               <Text style={styles.nowPlayingLabel}>TOCANDO AGORA</Text>
               <Text numberOfLines={1} style={styles.nowPlayingName}>{currentTitle}</Text>
             </View>
-            <Pressable
-              accessibilityLabel="Diminuir volume"
-              onPress={() => changeVolume(volume - 0.1)}
-              style={styles.iconButton}
-            >
-              <Ionicons name="volume-low" size={18} color={colors.text} />
-            </Pressable>
-            <Pressable
-              accessibilityLabel="Aumentar volume"
-              onPress={() => changeVolume(volume + 0.1)}
-              style={styles.iconButton}
-            >
-              <Ionicons name="volume-high" size={18} color={colors.text} />
-            </Pressable>
           </View>
           <View style={styles.playerControls}>
             <Pressable

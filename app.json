@@ -19,7 +19,6 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
@@ -40,7 +39,13 @@
           "imageWidth": 76
         }
       ],
-      "expo-audio",
+      [
+        "expo-audio",
+        {
+          "enableBackgroundPlayback": true,
+          "recordAudioAndroid": false
+        }
+      ],
       "expo-asset"
     ],
     "experiments": {
@@ -52,6 +57,7 @@
       "eas": {
         "projectId": "bef95e97-853a-4009-a5c3-9e4bbb055d75"
       }
-    }
+    },
+    "owner": "skylla00"
   }
 }

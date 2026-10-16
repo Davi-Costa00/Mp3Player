@@ -17,6 +17,14 @@ Abra o projeto no Expo Go ou em um emulador Android/iOS. Para gerar um bundle An
 npx expo export --platform android
 ```
 
+Para gerar um APK instalável em um dispositivo Android com EAS Build:
+
+```bash
+npx eas-cli@latest build --platform android --profile preview
+```
+
+Quando o build terminar, baixe o APK pelo link fornecido pelo EAS.
+
 ## Recursos
 
 - Importar arquivos MP3 do dispositivo.
