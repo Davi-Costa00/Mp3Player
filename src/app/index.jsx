@@ -327,6 +327,12 @@ function createStyles(colors) {
       justifyContent: "center",
     },
     disabledPlayButton: { opacity: 0.55 },
+    progressTouchArea: {
+      height: 28,
+      marginVertical: -11.5,
+      justifyContent: "center",
+      position: "relative",
+    },
     progressTrack: {
       height: 5,
       borderRadius: 4,
@@ -334,8 +340,20 @@ function createStyles(colors) {
       overflow: "hidden",
     },
     progressFill: {
+      width: "100%",
       height: "100%",
       borderRadius: 4,
+      backgroundColor: colors.accent,
+    },
+    progressThumb: {
+      position: "absolute",
+      left: 0,
+      top: 8,
+      width: 12,
+      height: 12,
+      borderRadius: 6,
+      borderWidth: 2,
+      borderColor: colors.background,
       backgroundColor: colors.accent,
     },
     playerTimes: {
@@ -394,6 +412,69 @@ function createStyles(colors) {
   });
 }
 
+function ProgressSlider({ progress, durationMillis, onSeek, styles }) {
+  const [width, setWidth] = useState(0);
+  const [dragProgress, setDragProgress] = useState(null);
+  const dragStartXRef = useRef(0);
+  const dragStartProgressRef = useRef(0);
+  const dragProgressRef = useRef(0);
+  const currentProgress = Math.min(Math.max(progress, 0), 1);
+  const displayedProgress = dragProgress ?? currentProgress;
+
+  return (
+    <View
+      accessibilityLabel="Avançar ou retroceder na música"
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+      onStartShouldSetResponder={(event) => {
+        if (!durationMillis || !width) return false;
+        return Math.abs(event.nativeEvent.locationX - currentProgress * width) <= 18;
+      }}
+      onResponderGrant={(event) => {
+        dragStartXRef.current = event.nativeEvent.locationX;
+        dragStartProgressRef.current = currentProgress;
+        dragProgressRef.current = currentProgress;
+        setDragProgress(currentProgress);
+      }}
+      onResponderMove={(event) => {
+        if (!width) return;
+        const nextProgress = Math.min(
+          Math.max(
+            dragStartProgressRef.current +
+              (event.nativeEvent.locationX - dragStartXRef.current) / width,
+            0,
+          ),
+          1,
+        );
+        dragProgressRef.current = nextProgress;
+        setDragProgress(nextProgress);
+      }}
+      onResponderRelease={async () => {
+        const nextProgress = dragProgressRef.current;
+        await onSeek(nextProgress, durationMillis);
+        setDragProgress(null);
+      }}
+      onResponderTerminate={() => setDragProgress(null)}
+      onResponderTerminationRequest={() => false}
+      style={styles.progressTouchArea}
+    >
+      <View style={styles.progressTrack}>
+        <View
+          style={[
+            styles.progressFill,
+            { width: `${displayedProgress * 100}%` },
+          ]}
+        />
+      </View>
+      <View
+        style={[
+          styles.progressThumb,
+          { left: `${displayedProgress * 100}%`, marginLeft: -6 },
+        ]}
+      />
+    </View>
+  );
+}
+
 export default function App() {
   const [songs, setSongs] = useState([]);
   const [playlists, setPlaylists] = useState([]);
@@ -411,7 +492,6 @@ export default function App() {
   const [nameInput, setNameInput] = useState("");
   const [status, setStatus] = useState("");
   const [finishedPlayback, setFinishedPlayback] = useState(null);
-  const [progressWidth, setProgressWidth] = useState(0);
   const volumeRef = useRef(1);
   const soundRef = useRef(null);
   const playbackStatusSubscriptionRef = useRef(null);
@@ -570,31 +650,28 @@ export default function App() {
   const playSong = useCallback(
     async (song) => {
       try {
-        if (soundRef.current) {
-          const previousSound = soundRef.current;
-          soundRef.current = null;
-          playbackStatusSubscriptionRef.current?.remove();
-          playbackStatusSubscriptionRef.current = null;
-          previousSound.setActiveForLockScreen(false);
-          previousSound.pause();
-          previousSound.remove();
+        let player = soundRef.current;
+        if (player) {
+          player.pause();
+          player.replace({ uri: song.uri });
+        } else {
+          player = createAudioPlayer(
+            { uri: song.uri },
+            { updateInterval: 500, volume: volumeRef.current },
+          );
+          soundRef.current = player;
+          playbackStatusSubscriptionRef.current = player.addListener(
+            "playbackStatusUpdate",
+            (playbackStatus) => {
+              if (soundRef.current === player) {
+                handlePlaybackStatus(playbackStatus);
+              }
+            },
+          );
         }
         currentSongRef.current = song;
         setCurrentSong(song);
         setPlayback({ isPlaying: false, positionMillis: 0, durationMillis: 0 });
-        const player = createAudioPlayer(
-          { uri: song.uri },
-          { updateInterval: 500, volume: volumeRef.current },
-        );
-        soundRef.current = player;
-        playbackStatusSubscriptionRef.current = player.addListener(
-          "playbackStatusUpdate",
-          (playbackStatus) => {
-            if (soundRef.current === player) {
-              handlePlaybackStatus(playbackStatus);
-            }
-          },
-        );
         player.setActiveForLockScreen(true, {
           title: song.displayName || song.name,
         });
@@ -929,15 +1006,15 @@ export default function App() {
     setNameInput("");
   };
 
-  const seekTo = async (event) => {
-    if (!soundRef.current || !playback.durationMillis || !progressWidth) return;
-    const ratio = Math.min(Math.max(event.nativeEvent.locationX / progressWidth, 0), 1);
+  const seekToProgress = useCallback(async (ratio, durationMillis) => {
+    const sound = soundRef.current;
+    if (!sound || !durationMillis) return;
     try {
-      await soundRef.current.seekTo((ratio * playback.durationMillis) / 1000);
+      await sound.seekTo((ratio * durationMillis) / 1000);
     } catch (error) {
       setStatus(`Não foi possível alterar a posição da música: ${error.message}`);
     }
-  };
+  }, []);
 
   const currentTitle = currentSong
     ? currentSong.displayName || currentSong.name
@@ -958,7 +1035,7 @@ export default function App() {
             <View style={styles.brandMark}>
               <Ionicons name="musical-notes" size={22} color="#fff" />
             </View>
-            <Text style={styles.brandTitle}>Player de Música</Text>
+            <Text style={styles.brandTitle}>SportiFree</Text>
           </View>
           <Pressable
             accessibilityLabel="Abrir configurações"
@@ -1225,14 +1302,12 @@ export default function App() {
               />
             </Pressable>
           </View>
-          <Pressable
-            accessibilityLabel="Avançar ou retroceder na música"
-            onLayout={(event) => setProgressWidth(event.nativeEvent.layout.width)}
-            onPress={seekTo}
-            style={styles.progressTrack}
-          >
-            <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
-          </Pressable>
+          <ProgressSlider
+            durationMillis={playback.durationMillis}
+            onSeek={seekToProgress}
+            progress={progress}
+            styles={styles}
+          />
           <View style={styles.playerTimes}>
             <Text style={styles.timeText}>{formatTime(playback.positionMillis)}</Text>
             <Text style={styles.timeText}>{formatTime(playback.durationMillis)}</Text>
