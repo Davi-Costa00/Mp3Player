@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   StatusBar,
   StyleSheet,
   Switch,
@@ -18,6 +18,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+} from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const STORAGE_KEY = "player-de-musica-native";
@@ -412,68 +416,415 @@ function createStyles(colors) {
   });
 }
 
-function ProgressSlider({ progress, durationMillis, onSeek, styles }) {
-  const [width, setWidth] = useState(0);
-  const [dragProgress, setDragProgress] = useState(null);
+const PlaylistItem = React.memo(function PlaylistItem({
+  playlist,
+  songCount,
+  colors,
+  styles,
+  onOpenPlaylist,
+  onRenamePlaylist,
+  onRemovePlaylist,
+}) {
+  const isBuiltIn = playlist.id === "all" || playlist.id === "recent";
+
+  return (
+    <View style={[styles.card, styles.playlistCard]}>
+      <View style={styles.cardTop}>
+        <View style={styles.artwork}>
+          <Ionicons
+            name={
+              playlist.id === "recent"
+                ? "time-outline"
+                : isBuiltIn
+                  ? "musical-notes"
+                  : "musical-note"
+            }
+            size={27}
+            color={colors.accent}
+          />
+        </View>
+        <View style={styles.cardText}>
+          <Text style={styles.cardTitle}>{playlist.name}</Text>
+          <Text style={styles.cardDescription}>
+            {playlist.description || "Sua playlist personalizada."}
+          </Text>
+          <Text style={styles.cardCount}>
+            {songCount} {songCount === 1 ? "música" : "músicas"}
+          </Text>
+        </View>
+      </View>
+      {isBuiltIn ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => onOpenPlaylist(playlist.id)}
+          style={styles.primaryButton}
+        >
+          <Text style={styles.primaryButtonText}>Abrir playlist</Text>
+          <Ionicons name="arrow-forward" size={17} color="#171323" />
+        </Pressable>
+      ) : (
+        <View style={styles.cardActions}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => onOpenPlaylist(playlist.id)}
+            style={styles.primaryButton}
+          >
+            <Text style={styles.primaryButtonText}>Abrir playlist</Text>
+            <Ionicons name="arrow-forward" size={17} color="#171323" />
+          </Pressable>
+          <Pressable
+            accessibilityLabel={`Renomear ${playlist.name}`}
+            onPress={() => onRenamePlaylist(playlist)}
+            style={styles.iconButton}
+          >
+            <Ionicons name="pencil-outline" size={18} color={colors.text} />
+          </Pressable>
+          <Pressable
+            accessibilityLabel={`Remover ${playlist.name}`}
+            onPress={() => onRemovePlaylist(playlist)}
+            style={styles.iconButton}
+          >
+            <Ionicons name="trash-outline" size={18} color={colors.danger} />
+          </Pressable>
+        </View>
+      )}
+    </View>
+  );
+});
+
+const SongItem = React.memo(function SongItem({
+  song,
+  isCurrent,
+  isPlaying,
+  colors,
+  styles,
+  onPlaySong,
+  onTogglePlayback,
+  onRenameSong,
+  onRemoveSong,
+}) {
+  return (
+    <View
+      style={[
+        styles.card,
+        styles.songCard,
+        isCurrent && styles.currentSongCard,
+      ]}
+    >
+      <View style={styles.songHeader}>
+        <Pressable onPress={() => onPlaySong(song)} style={styles.songMain}>
+          <View style={styles.songArtwork}>
+            <Ionicons
+              name={isCurrent && isPlaying ? "volume-high" : "musical-note"}
+              size={23}
+              color={colors.accent}
+            />
+          </View>
+          <View style={styles.cardText}>
+            <Text numberOfLines={2} style={styles.songName}>
+              {song.displayName || song.name}
+            </Text>
+            <Text numberOfLines={1} style={styles.songSubtext}>
+              {isCurrent && isPlaying ? "Tocando agora" : "Arquivo MP3"}
+            </Text>
+          </View>
+        </Pressable>
+        <Pressable
+          accessibilityLabel={`Renomear ${song.displayName || song.name}`}
+          onPress={() => onRenameSong(song)}
+          hitSlop={6}
+          style={styles.iconButton}
+        >
+          <Ionicons name="pencil-outline" size={17} color={colors.muted} />
+        </Pressable>
+        <Pressable
+          accessibilityLabel={`Remover ${song.displayName || song.name}`}
+          onPress={() => onRemoveSong(song)}
+          hitSlop={6}
+          style={styles.iconButton}
+        >
+          <Ionicons name="trash-outline" size={17} color={colors.danger} />
+        </Pressable>
+      </View>
+      <View style={styles.cardActions}>
+        <Pressable
+          onPress={() => (isCurrent ? onTogglePlayback() : onPlaySong(song))}
+          style={styles.primaryButton}
+        >
+          <Ionicons
+            name={isCurrent && isPlaying ? "pause" : "play"}
+            size={17}
+            color="#171323"
+          />
+          <Text style={styles.primaryButtonText}>
+            {isCurrent && isPlaying ? "Pausar" : "Reproduzir"}
+          </Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+});
+
+const PlaylistLibrary = React.memo(function PlaylistLibrary({
+  activePlaylistId,
+  playlistSongs,
+  playlists,
+  songs,
+  customPlaylist,
+  currentSongId,
+  isPlaying,
+  colors,
+  styles,
+  onBack,
+  onOpenPlaylist,
+  onCreatePlaylist,
+  onImportSongs,
+  onPlaySong,
+  onTogglePlayback,
+  onRenameSong,
+  onRemoveSong,
+  onRenamePlaylist,
+  onRemovePlaylist,
+}) {
+  const playlistItems = useMemo(
+    () => [...BUILT_IN_PLAYLISTS, ...playlists],
+    [playlists],
+  );
+  const songIds = useMemo(
+    () => new Set(songs.map((song) => String(song.id))),
+    [songs],
+  );
+  const listData = activePlaylistId ? playlistSongs : playlistItems;
+
+  const renderItem = useCallback(
+    ({ item }) => {
+      if (!activePlaylistId) {
+        const songCount =
+          item.id === "all" || item.id === "recent"
+            ? songs.length
+            : (item.songIds || []).filter((id) => songIds.has(String(id))).length;
+
+        return (
+          <PlaylistItem
+            playlist={item}
+            songCount={songCount}
+            colors={colors}
+            styles={styles}
+            onOpenPlaylist={onOpenPlaylist}
+            onRenamePlaylist={onRenamePlaylist}
+            onRemovePlaylist={onRemovePlaylist}
+          />
+        );
+      }
+
+      return (
+        <SongItem
+          song={item}
+          isCurrent={currentSongId === item.id}
+          isPlaying={isPlaying}
+          colors={colors}
+          styles={styles}
+          onPlaySong={onPlaySong}
+          onTogglePlayback={onTogglePlayback}
+          onRenameSong={onRenameSong}
+          onRemoveSong={onRemoveSong}
+        />
+      );
+    },
+    [
+      activePlaylistId,
+      colors,
+      currentSongId,
+      isPlaying,
+      onOpenPlaylist,
+      onPlaySong,
+      onRemovePlaylist,
+      onRemoveSong,
+      onRenamePlaylist,
+      onRenameSong,
+      onTogglePlayback,
+      songIds,
+      songs.length,
+      styles,
+    ],
+  );
+
+  const listHeader = useMemo(
+    () =>
+      activePlaylistId ? (
+        <>
+          <Pressable onPress={onBack} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={18} color={colors.accentStrong} />
+            <Text style={styles.backText}>Voltar às playlists</Text>
+          </Pressable>
+          <View style={styles.intro}>
+            <Text style={styles.heading}>
+              {customPlaylist?.name ||
+                BUILT_IN_PLAYLISTS.find(
+                  (playlist) => playlist.id === activePlaylistId,
+                )?.name ||
+                "Suas músicas"}
+            </Text>
+            <Text style={styles.subtitle}>
+              {playlistSongs.length}{" "}
+              {playlistSongs.length === 1 ? "música" : "músicas"}
+            </Text>
+          </View>
+        </>
+      ) : (
+        <View style={styles.intro}>
+          <Text style={styles.heading}>Suas playlists</Text>
+          <Text style={styles.subtitle}>
+            Escolha uma playlist para começar a ouvir.
+          </Text>
+        </View>
+      ),
+    [
+      activePlaylistId,
+      colors.accentStrong,
+      customPlaylist,
+      onBack,
+      playlistSongs.length,
+      styles,
+    ],
+  );
+  const listFooter = useMemo(
+    () => (
+      <Pressable
+        onPress={activePlaylistId ? onImportSongs : onCreatePlaylist}
+        style={styles.addCard}
+      >
+        <Ionicons name="add-circle" size={26} color={colors.accent} />
+        <Text style={styles.addCardText}>
+          {activePlaylistId ? "Adicionar músicas MP3" : "Nova playlist"}
+        </Text>
+      </Pressable>
+    ),
+    [activePlaylistId, colors.accent, onCreatePlaylist, onImportSongs, styles],
+  );
+  const listEmpty = useMemo(
+    () =>
+      activePlaylistId ? (
+        <View style={styles.emptyState}>
+          <View style={styles.artworkLarge}>
+            <Ionicons name="musical-notes" size={34} color="#fff" />
+          </View>
+          <Text style={styles.emptyTitle}>Sua playlist está vazia</Text>
+          <Text style={styles.emptyText}>
+            Adicione arquivos MP3 para começar a ouvir suas músicas aqui.
+          </Text>
+        </View>
+      ) : null,
+    [activePlaylistId, styles],
+  );
+
+  return (
+    <FlatList
+      key={activePlaylistId ? "songs" : "playlists"}
+      style={styles.screen}
+      data={listData}
+      renderItem={renderItem}
+      keyExtractor={(item) => String(item.id)}
+      ListHeaderComponent={listHeader}
+      ListFooterComponent={listFooter}
+      ListEmptyComponent={listEmpty}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+      initialNumToRender={8}
+      maxToRenderPerBatch={8}
+      updateCellsBatchingPeriod={50}
+      windowSize={5}
+      removeClippedSubviews={Platform.OS === "android"}
+    />
+  );
+});
+
+const ProgressSlider = React.memo(function ProgressSlider({
+  progress,
+  durationMillis,
+  onSeek,
+  styles,
+}) {
+  const widthRef = useRef(0);
+  const isDraggingRef = useRef(false);
   const dragStartXRef = useRef(0);
   const dragStartProgressRef = useRef(0);
   const dragProgressRef = useRef(0);
-  const currentProgress = Math.min(Math.max(progress, 0), 1);
-  const displayedProgress = dragProgress ?? currentProgress;
+  const sliderWidth = useSharedValue(0);
+  const animatedProgress = useSharedValue(
+    Math.min(Math.max(progress, 0), 1),
+  );
+  const fillStyle = useAnimatedStyle(() => ({
+    width: animatedProgress.value * sliderWidth.value,
+  }));
+  const thumbStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: animatedProgress.value * sliderWidth.value - 6 }],
+  }));
+
+  useEffect(() => {
+    if (!isDraggingRef.current) {
+      animatedProgress.set(Math.min(Math.max(progress, 0), 1));
+    }
+  }, [animatedProgress, progress]);
 
   return (
     <View
       accessibilityLabel="Avançar ou retroceder na música"
-      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+      onLayout={(event) => {
+        const width = event.nativeEvent.layout.width;
+        widthRef.current = width;
+        sliderWidth.set(width);
+      }}
       onStartShouldSetResponder={(event) => {
-        if (!durationMillis || !width) return false;
-        return Math.abs(event.nativeEvent.locationX - currentProgress * width) <= 18;
+        if (!durationMillis || !widthRef.current) return false;
+        return (
+          Math.abs(
+            event.nativeEvent.locationX -
+              Math.min(Math.max(progress, 0), 1) * widthRef.current,
+          ) <= 18
+        );
       }}
       onResponderGrant={(event) => {
+        const currentProgress = Math.min(Math.max(progress, 0), 1);
+        isDraggingRef.current = true;
         dragStartXRef.current = event.nativeEvent.locationX;
         dragStartProgressRef.current = currentProgress;
         dragProgressRef.current = currentProgress;
-        setDragProgress(currentProgress);
+        animatedProgress.set(currentProgress);
       }}
       onResponderMove={(event) => {
-        if (!width) return;
+        if (!widthRef.current) return;
         const nextProgress = Math.min(
           Math.max(
             dragStartProgressRef.current +
-              (event.nativeEvent.locationX - dragStartXRef.current) / width,
+              (event.nativeEvent.locationX - dragStartXRef.current) /
+                widthRef.current,
             0,
           ),
           1,
         );
         dragProgressRef.current = nextProgress;
-        setDragProgress(nextProgress);
+        animatedProgress.set(nextProgress);
       }}
-      onResponderRelease={async () => {
+      onResponderRelease={() => {
         const nextProgress = dragProgressRef.current;
-        await onSeek(nextProgress, durationMillis);
-        setDragProgress(null);
+        isDraggingRef.current = false;
+        onSeek(nextProgress, durationMillis);
       }}
-      onResponderTerminate={() => setDragProgress(null)}
+      onResponderTerminate={() => {
+        isDraggingRef.current = false;
+        animatedProgress.set(Math.min(Math.max(progress, 0), 1));
+      }}
       onResponderTerminationRequest={() => false}
       style={styles.progressTouchArea}
     >
       <View style={styles.progressTrack}>
-        <View
-          style={[
-            styles.progressFill,
-            { width: `${displayedProgress * 100}%` },
-          ]}
-        />
+        <Animated.View style={[styles.progressFill, fillStyle]} />
       </View>
-      <View
-        style={[
-          styles.progressThumb,
-          { left: `${displayedProgress * 100}%`, marginLeft: -6 },
-        ]}
-      />
+      <Animated.View style={[styles.progressThumb, thumbStyle]} />
     </View>
   );
-}
+});
 
 export default function App() {
   const [songs, setSongs] = useState([]);
@@ -747,10 +1098,20 @@ export default function App() {
     });
   }, []);
 
-  const openPlaylist = (playlistId) => {
+  const openPlaylist = useCallback((playlistId) => {
     setActivePlaylistId(playlistId);
     setStatus("");
-  };
+  }, []);
+
+  const onBackToPlaylists = useCallback(() => {
+    setActivePlaylistId(null);
+    setStatus("");
+  }, []);
+
+  const onRenamePlaylist = useCallback((playlist) => {
+    setNameInput(playlist.name);
+    setNameDialog({ mode: "rename", playlistId: playlist.id });
+  }, []);
 
   const savePlaylistName = () => {
     const nextName = nameInput.trim();
@@ -791,7 +1152,7 @@ export default function App() {
     setNameInput("");
   };
 
-  const createPlaylist = () => {
+  const createPlaylist = useCallback(() => {
     let name = "Nova playlist";
     let suffix = 2;
     while (
@@ -804,9 +1165,9 @@ export default function App() {
     }
     setNameInput(name);
     setNameDialog({ mode: "create" });
-  };
+  }, [playlists]);
 
-  const removePlaylist = (playlist) => {
+  const removePlaylist = useCallback((playlist) => {
     Alert.alert("Remover playlist", `Deseja remover "${playlist.name}"?`, [
       { text: "Cancelar", style: "cancel" },
       {
@@ -821,9 +1182,9 @@ export default function App() {
         },
       },
     ]);
-  };
+  }, [activePlaylistId]);
 
-  const importSongs = async () => {
+  const importSongs = useCallback(async () => {
     const copiedUris = [];
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -894,9 +1255,9 @@ export default function App() {
         : "";
       setStatus(`Não foi possível importar as músicas: ${error.message}.${cleanupMessage}`);
     }
-  };
+  }, [customPlaylist]);
 
-  const removeSong = (song) => {
+  const removeSong = useCallback((song) => {
     if (customPlaylist) {
       Alert.alert(
         "Remover da playlist",
@@ -975,12 +1336,12 @@ export default function App() {
         },
       ],
     );
-  };
+  }, [customPlaylist]);
 
-  const renameSong = (song) => {
+  const renameSong = useCallback((song) => {
     setNameInput(song.displayName || song.name.replace(/\.mp3$/i, ""));
     setNameDialog({ mode: "renameSong", songId: song.id });
-  };
+  }, []);
 
   const saveSongName = () => {
     const nextName = nameInput.trim();
@@ -1046,211 +1407,27 @@ export default function App() {
           </Pressable>
         </View>
 
-        <ScrollView
-          contentContainerStyle={styles.content}
-          showsVerticalScrollIndicator={false}
-        >
-          {!activePlaylistId ? (
-            <>
-              <View style={styles.intro}>
-                <Text style={styles.heading}>Suas playlists</Text>
-                <Text style={styles.subtitle}>
-                  Escolha uma playlist para começar a ouvir.
-                </Text>
-              </View>
-              {BUILT_IN_PLAYLISTS.map((playlist) => {
-                const count = playlist.id === "all" || playlist.id === "recent"
-                  ? songs.length
-                  : 0;
-                return (
-                  <View key={playlist.id} style={[styles.card, styles.playlistCard]}>
-                    <View style={styles.cardTop}>
-                      <View style={styles.artwork}>
-                        <Ionicons
-                          name={playlist.id === "recent" ? "time-outline" : "musical-notes"}
-                          size={27}
-                          color={colors.accent}
-                        />
-                      </View>
-                      <View style={styles.cardText}>
-                        <Text style={styles.cardTitle}>{playlist.name}</Text>
-                        <Text style={styles.cardDescription}>{playlist.description}</Text>
-                        <Text style={styles.cardCount}>
-                          {count} {count === 1 ? "música" : "músicas"}
-                        </Text>
-                      </View>
-                    </View>
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() => openPlaylist(playlist.id)}
-                      style={styles.primaryButton}
-                    >
-                      <Text style={styles.primaryButtonText}>Abrir playlist</Text>
-                      <Ionicons name="arrow-forward" size={17} color="#171323" />
-                    </Pressable>
-                  </View>
-                );
-              })}
-              {playlists.map((playlist) => (
-                <View key={playlist.id} style={[styles.card, styles.playlistCard]}>
-                  <View style={styles.cardTop}>
-                    <View style={styles.artwork}>
-                      <Ionicons name="musical-note" size={27} color={colors.accent} />
-                    </View>
-                    <View style={styles.cardText}>
-                      <Text style={styles.cardTitle}>{playlist.name}</Text>
-                      <Text style={styles.cardDescription}>
-                        Sua playlist personalizada.
-                      </Text>
-                      <Text style={styles.cardCount}>
-                        {(playlist.songIds || []).filter((id) =>
-                          songs.some((song) => String(song.id) === String(id)),
-                        ).length}{" "}
-                        {(playlist.songIds || []).length === 1 ? "música" : "músicas"}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.cardActions}>
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() => openPlaylist(playlist.id)}
-                      style={styles.primaryButton}
-                    >
-                      <Text style={styles.primaryButtonText}>Abrir playlist</Text>
-                      <Ionicons name="arrow-forward" size={17} color="#171323" />
-                    </Pressable>
-                    <Pressable
-                      accessibilityLabel={`Renomear ${playlist.name}`}
-                      onPress={() => {
-                        setNameInput(playlist.name);
-                        setNameDialog({ mode: "rename", playlistId: playlist.id });
-                      }}
-                      style={styles.iconButton}
-                    >
-                      <Ionicons name="pencil-outline" size={18} color={colors.text} />
-                    </Pressable>
-                    <Pressable
-                      accessibilityLabel={`Remover ${playlist.name}`}
-                      onPress={() => removePlaylist(playlist)}
-                      style={styles.iconButton}
-                    >
-                      <Ionicons name="trash-outline" size={18} color={colors.danger} />
-                    </Pressable>
-                  </View>
-                </View>
-              ))}
-              <Pressable onPress={createPlaylist} style={styles.addCard}>
-                <Ionicons name="add-circle" size={26} color={colors.accent} />
-                <Text style={styles.addCardText}>Nova playlist</Text>
-              </Pressable>
-            </>
-          ) : (
-            <>
-              <Pressable
-                onPress={() => {
-                  setActivePlaylistId(null);
-                  setStatus("");
-                }}
-                style={styles.backButton}
-              >
-                <Ionicons name="arrow-back" size={18} color={colors.accentStrong} />
-                <Text style={styles.backText}>Voltar às playlists</Text>
-              </Pressable>
-              <View style={styles.intro}>
-                <Text style={styles.heading}>
-                  {customPlaylist?.name ||
-                    BUILT_IN_PLAYLISTS.find((playlist) => playlist.id === activePlaylistId)?.name ||
-                    "Suas músicas"}
-                </Text>
-                <Text style={styles.subtitle}>
-                  {playlistSongs.length} {playlistSongs.length === 1 ? "música" : "músicas"}
-                </Text>
-              </View>
-              {playlistSongs.map((song) => {
-                const isCurrent = currentSong?.id === song.id;
-                return (
-                  <View
-                    key={song.id}
-                    style={[
-                      styles.card,
-                      styles.songCard,
-                      isCurrent && styles.currentSongCard,
-                    ]}
-                  >
-                    <View style={styles.songHeader}>
-                      <Pressable
-                        onPress={() => playSong(song)}
-                        style={styles.songMain}
-                      >
-                        <View style={styles.songArtwork}>
-                          <Ionicons
-                            name={isCurrent && playback.isPlaying ? "volume-high" : "musical-note"}
-                            size={23}
-                            color={colors.accent}
-                          />
-                        </View>
-                        <View style={styles.cardText}>
-                          <Text numberOfLines={2} style={styles.songName}>
-                            {song.displayName || song.name}
-                          </Text>
-                          <Text numberOfLines={1} style={styles.songSubtext}>
-                            {isCurrent && playback.isPlaying ? "Tocando agora" : "Arquivo MP3"}
-                          </Text>
-                        </View>
-                      </Pressable>
-                      <Pressable
-                        accessibilityLabel={`Renomear ${song.displayName || song.name}`}
-                        onPress={() => renameSong(song)}
-                        hitSlop={6}
-                        style={styles.iconButton}
-                      >
-                        <Ionicons name="pencil-outline" size={17} color={colors.muted} />
-                      </Pressable>
-                      <Pressable
-                        accessibilityLabel={`Remover ${song.displayName || song.name}`}
-                        onPress={() => removeSong(song)}
-                        hitSlop={6}
-                        style={styles.iconButton}
-                      >
-                        <Ionicons name="trash-outline" size={17} color={colors.danger} />
-                      </Pressable>
-                    </View>
-                    <View style={styles.cardActions}>
-                      <Pressable
-                        onPress={() => (isCurrent ? togglePlayback() : playSong(song))}
-                        style={styles.primaryButton}
-                      >
-                        <Ionicons
-                          name={isCurrent && playback.isPlaying ? "pause" : "play"}
-                          size={17}
-                          color="#171323"
-                        />
-                        <Text style={styles.primaryButtonText}>
-                          {isCurrent && playback.isPlaying ? "Pausar" : "Reproduzir"}
-                        </Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                );
-              })}
-              {!playlistSongs.length && (
-                <View style={styles.emptyState}>
-                  <View style={styles.artworkLarge}>
-                    <Ionicons name="musical-notes" size={34} color="#fff" />
-                  </View>
-                  <Text style={styles.emptyTitle}>Sua playlist está vazia</Text>
-                  <Text style={styles.emptyText}>
-                    Adicione arquivos MP3 para começar a ouvir suas músicas aqui.
-                  </Text>
-                </View>
-              )}
-              <Pressable onPress={importSongs} style={styles.addCard}>
-                <Ionicons name="add-circle" size={26} color={colors.accent} />
-                <Text style={styles.addCardText}>Adicionar músicas MP3</Text>
-              </Pressable>
-            </>
-          )}
-        </ScrollView>
+        <PlaylistLibrary
+          activePlaylistId={activePlaylistId}
+          playlistSongs={playlistSongs}
+          playlists={playlists}
+          songs={songs}
+          customPlaylist={customPlaylist}
+          currentSongId={currentSong?.id}
+          isPlaying={playback.isPlaying}
+          colors={colors}
+          styles={styles}
+          onBack={onBackToPlaylists}
+          onOpenPlaylist={openPlaylist}
+          onCreatePlaylist={createPlaylist}
+          onImportSongs={importSongs}
+          onPlaySong={playSong}
+          onTogglePlayback={togglePlayback}
+          onRenameSong={renameSong}
+          onRemoveSong={removeSong}
+          onRenamePlaylist={onRenamePlaylist}
+          onRemovePlaylist={removePlaylist}
+        />
 
         {!!status && <Text accessibilityRole="alert" style={styles.status}>{status}</Text>}
 
