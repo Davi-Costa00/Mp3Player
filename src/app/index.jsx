@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
-  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -19,6 +18,7 @@ import * as DocumentPicker from "expo-document-picker";
 import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import Animated, {
+  useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
 } from "react-native-reanimated";
@@ -142,6 +142,8 @@ function createStyles(colors) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: colors.background },
     screen: { flex: 1, backgroundColor: colors.background },
+    webShell: { width: "100%", maxWidth: 760, alignSelf: "center" },
+    headerContainer: { overflow: "hidden" },
     header: {
       minHeight: 68,
       paddingHorizontal: 20,
@@ -424,6 +426,7 @@ const PlaylistItem = React.memo(function PlaylistItem({
   onOpenPlaylist,
   onRenamePlaylist,
   onRemovePlaylist,
+  onScroll,
 }) {
   const isBuiltIn = playlist.id === "all" || playlist.id === "recent";
 
@@ -585,6 +588,7 @@ const PlaylistLibrary = React.memo(function PlaylistLibrary({
   onRemoveSong,
   onRenamePlaylist,
   onRemovePlaylist,
+  onScroll,
 }) {
   const playlistItems = useMemo(
     () => [...BUILT_IN_PLAYLISTS, ...playlists],
@@ -719,7 +723,7 @@ const PlaylistLibrary = React.memo(function PlaylistLibrary({
   );
 
   return (
-    <FlatList
+    <Animated.FlatList
       key={activePlaylistId ? "songs" : "playlists"}
       style={styles.screen}
       data={listData}
@@ -735,6 +739,8 @@ const PlaylistLibrary = React.memo(function PlaylistLibrary({
       updateCellsBatchingPeriod={50}
       windowSize={5}
       removeClippedSubviews={Platform.OS === "android"}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
     />
   );
 });
@@ -854,6 +860,29 @@ export default function App() {
     [settings.lightMode],
   );
   const colors = settings.lightMode ? LIGHT : DARK;
+  const headerOffset = useSharedValue(0);
+  const shouldAnimateHeader = Platform.OS !== "web";
+  const headerScrollHandler = useAnimatedScrollHandler({
+    onBeginDrag: (event, context) => {
+      context.previousY = event.contentOffset.y;
+    },
+    onScroll: (event, context) => {
+      if (!shouldAnimateHeader) return;
+      const currentY = event.contentOffset.y;
+      const delta = currentY - context.previousY;
+      headerOffset.value = Math.min(
+        Math.max(headerOffset.value + delta, 0),
+        68,
+      );
+      context.previousY = currentY;
+    },
+  });
+  const headerAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -headerOffset.value }],
+  }));
+  const headerContainerAnimatedStyle = useAnimatedStyle(() => ({
+    height: Math.max(0, 68 - headerOffset.value),
+  }));
 
   const customPlaylist = useMemo(
     () => playlists.find((playlist) => playlist.id === activePlaylistId) || null,
@@ -1099,14 +1128,16 @@ export default function App() {
   }, []);
 
   const openPlaylist = useCallback((playlistId) => {
+    if (shouldAnimateHeader) headerOffset.set(0);
     setActivePlaylistId(playlistId);
     setStatus("");
-  }, []);
+  }, [headerOffset, shouldAnimateHeader]);
 
   const onBackToPlaylists = useCallback(() => {
+    if (shouldAnimateHeader) headerOffset.set(0);
     setActivePlaylistId(null);
     setStatus("");
-  }, []);
+  }, [headerOffset, shouldAnimateHeader]);
 
   const onRenamePlaylist = useCallback((playlist) => {
     setNameInput(playlist.name);
@@ -1390,22 +1421,26 @@ export default function App() {
         barStyle={settings.lightMode ? "dark-content" : "light-content"}
         backgroundColor={colors.header}
       />
-      <View style={styles.screen}>
-        <View style={styles.header}>
-          <View style={styles.brand}>
-            <View style={styles.brandMark}>
-              <Ionicons name="musical-notes" size={22} color="#fff" />
+      <View style={[styles.screen, Platform.OS === "web" && styles.webShell]}>
+        <Animated.View
+          style={[styles.headerContainer, headerContainerAnimatedStyle]}
+        >
+          <Animated.View style={[styles.header, headerAnimatedStyle]}>
+            <View style={styles.brand}>
+              <View style={styles.brandMark}>
+                <Ionicons name="musical-notes" size={22} color="#fff" />
+              </View>
+              <Text style={styles.brandTitle}>Mp3Player</Text>
             </View>
-            <Text style={styles.brandTitle}>SportiFree</Text>
-          </View>
-          <Pressable
-            accessibilityLabel="Abrir configurações"
-            onPress={() => setSettingsOpen(true)}
-            style={styles.headerButton}
-          >
-            <Ionicons name="settings-outline" size={22} color={colors.text} />
-          </Pressable>
-        </View>
+            <Pressable
+              accessibilityLabel="Abrir configurações"
+              onPress={() => setSettingsOpen(true)}
+              style={styles.headerButton}
+            >
+              <Ionicons name="settings-outline" size={22} color={colors.text} />
+            </Pressable>
+          </Animated.View>
+        </Animated.View>
 
         <PlaylistLibrary
           activePlaylistId={activePlaylistId}
@@ -1427,6 +1462,7 @@ export default function App() {
           onRemoveSong={removeSong}
           onRenamePlaylist={onRenamePlaylist}
           onRemovePlaylist={removePlaylist}
+          onScroll={headerScrollHandler}
         />
 
         {!!status && <Text accessibilityRole="alert" style={styles.status}>{status}</Text>}
