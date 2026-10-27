@@ -1,0 +1,23 @@
+﻿diff --git "a/C:\\Users\\davic\\AppData\\Local\\Temp\\expo-audio-original\\package\\android\\src\\main\\java\\expo\\modules\\audio\\AudioModule.kt" "b/node_modules\\expo-audio\\android\\src\\main\\java\\expo\\modules\\audio\\AudioModule.kt"
+index 992239b..987c7f0 100644
+--- "a/C:\\Users\\davic\\AppData\\Local\\Temp\\expo-audio-original\\package\\android\\src\\main\\java\\expo\\modules\\audio\\AudioModule.kt"
++++ "b/node_modules\\expo-audio\\android\\src\\main\\java\\expo\\modules\\audio\\AudioModule.kt"
+@@ -202,10 +202,18 @@ class AudioModule : Module() {
+   @OptIn(DelicateCoroutinesApi::class)
+   override fun definition() = ModuleDefinition {
+     Name("ExpoAudio")
++    Events("onAudioControl")
+ 
+     OnCreate {
+       audioManager = appContext.reactContext?.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+       context.registerReceiver(ringerModeReceiver, IntentFilter(AudioManager.RINGER_MODE_CHANGED_ACTION))
++      AudioControlEvents.listener = { direction ->
++        sendEvent("onAudioControl", mapOf("direction" to direction))
++      }
++    }
++
++    OnDestroy {
++      AudioControlEvents.listener = null
+     }
+ 
+     AsyncFunction("setAudioModeAsync") { mode: AudioMode ->

@@ -3,6 +3,8 @@ import {
   Alert,
   KeyboardAvoidingView,
   Modal,
+  NativeEventEmitter,
+  NativeModules,
   Platform,
   Pressable,
   StatusBar,
@@ -21,8 +23,12 @@ import Animated, {
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
+  withTiming,
 } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 const STORAGE_KEY = "player-de-musica-native";
 
@@ -429,9 +435,24 @@ const PlaylistItem = React.memo(function PlaylistItem({
   onScroll,
 }) {
   const isBuiltIn = playlist.id === "all" || playlist.id === "recent";
+  const pressScale = useSharedValue(1);
+  const pressStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pressScale.value }],
+  }));
+  const pressIn = useCallback(() => {
+    pressScale.set(withTiming(0.985, { duration: 70 }));
+  }, [pressScale]);
+  const pressOut = useCallback(() => {
+    pressScale.set(withSpring(1, {
+      damping: 18,
+      stiffness: 420,
+      mass: 0.65,
+      overshootClamping: true,
+    }));
+  }, [pressScale]);
 
   return (
-    <View style={[styles.card, styles.playlistCard]}>
+    <Animated.View style={[styles.card, styles.playlistCard, pressStyle]}>
       <View style={styles.cardTop}>
         <View style={styles.artwork}>
           <Ionicons
@@ -457,24 +478,28 @@ const PlaylistItem = React.memo(function PlaylistItem({
         </View>
       </View>
       {isBuiltIn ? (
-        <Pressable
+        <AnimatedPressable
           accessibilityRole="button"
           onPress={() => onOpenPlaylist(playlist.id)}
+          onPressIn={pressIn}
+          onPressOut={pressOut}
           style={styles.primaryButton}
         >
           <Text style={styles.primaryButtonText}>Abrir playlist</Text>
           <Ionicons name="arrow-forward" size={17} color="#171323" />
-        </Pressable>
+        </AnimatedPressable>
       ) : (
         <View style={styles.cardActions}>
-          <Pressable
+          <AnimatedPressable
             accessibilityRole="button"
             onPress={() => onOpenPlaylist(playlist.id)}
+            onPressIn={pressIn}
+            onPressOut={pressOut}
             style={styles.primaryButton}
           >
             <Text style={styles.primaryButtonText}>Abrir playlist</Text>
             <Ionicons name="arrow-forward" size={17} color="#171323" />
-          </Pressable>
+          </AnimatedPressable>
           <Pressable
             accessibilityLabel={`Renomear ${playlist.name}`}
             onPress={() => onRenamePlaylist(playlist)}
@@ -491,7 +516,7 @@ const PlaylistItem = React.memo(function PlaylistItem({
           </Pressable>
         </View>
       )}
-    </View>
+    </Animated.View>
   );
 });
 
@@ -506,16 +531,38 @@ const SongItem = React.memo(function SongItem({
   onRenameSong,
   onRemoveSong,
 }) {
+  const pressScale = useSharedValue(1);
+  const pressStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pressScale.value }],
+  }));
+  const pressIn = useCallback(() => {
+    pressScale.set(withTiming(0.985, { duration: 70 }));
+  }, [pressScale]);
+  const pressOut = useCallback(() => {
+    pressScale.set(withSpring(1, {
+      damping: 18,
+      stiffness: 420,
+      mass: 0.65,
+      overshootClamping: true,
+    }));
+  }, [pressScale]);
+
   return (
-    <View
+    <Animated.View
       style={[
         styles.card,
         styles.songCard,
         isCurrent && styles.currentSongCard,
+        pressStyle,
       ]}
     >
       <View style={styles.songHeader}>
-        <Pressable onPress={() => onPlaySong(song)} style={styles.songMain}>
+        <AnimatedPressable
+          onPress={() => onPlaySong(song)}
+          onPressIn={pressIn}
+          onPressOut={pressOut}
+          style={styles.songMain}
+        >
           <View style={styles.songArtwork}>
             <Ionicons
               name={isCurrent && isPlaying ? "volume-high" : "musical-note"}
@@ -531,7 +578,7 @@ const SongItem = React.memo(function SongItem({
               {isCurrent && isPlaying ? "Tocando agora" : "Arquivo MP3"}
             </Text>
           </View>
-        </Pressable>
+        </AnimatedPressable>
         <Pressable
           accessibilityLabel={`Renomear ${song.displayName || song.name}`}
           onPress={() => onRenameSong(song)}
@@ -564,7 +611,7 @@ const SongItem = React.memo(function SongItem({
           </Text>
         </Pressable>
       </View>
-    </View>
+    </Animated.View>
   );
 });
 
@@ -734,11 +781,17 @@ const PlaylistLibrary = React.memo(function PlaylistLibrary({
       ListEmptyComponent={listEmpty}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
-      initialNumToRender={8}
-      maxToRenderPerBatch={8}
-      updateCellsBatchingPeriod={50}
-      windowSize={5}
+      initialNumToRender={6}
+      maxToRenderPerBatch={5}
+      updateCellsBatchingPeriod={16}
+      windowSize={3}
       removeClippedSubviews={Platform.OS === "android"}
+      disableVirtualization={false}
+      maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+      bounces={Platform.OS === "ios"}
+      alwaysBounceVertical={Platform.OS === "ios"}
+      overScrollMode={Platform.OS === "android" ? "always" : "never"}
+      decelerationRate={Platform.OS === "android" ? 0.985 : "normal"}
       onScroll={onScroll}
       scrollEventThrottle={16}
     />
@@ -854,6 +907,7 @@ export default function App() {
   const playbackStatusSubscriptionRef = useRef(null);
   const currentSongRef = useRef(currentSong);
   const currentQueueRef = useRef([]);
+  const playbackHistoryRef = useRef([]);
   const settingsRef = useRef(settings);
   const styles = useMemo(
     () => createStyles(settings.lightMode ? LIGHT : DARK),
@@ -865,16 +919,40 @@ export default function App() {
   const headerScrollHandler = useAnimatedScrollHandler({
     onBeginDrag: (event, context) => {
       context.previousY = event.contentOffset.y;
+      context.directionDistance = 0;
+      context.direction = 0;
     },
     onScroll: (event, context) => {
       if (!shouldAnimateHeader) return;
+
       const currentY = event.contentOffset.y;
+      if (currentY <= 8) {
+        context.previousY = currentY;
+        headerOffset.value = withTiming(0, { duration: 90 });
+        return;
+      }
+
       const delta = currentY - context.previousY;
-      headerOffset.value = Math.min(
-        Math.max(headerOffset.value + delta, 0),
-        68,
-      );
       context.previousY = currentY;
+      if (Math.abs(delta) < 2) return;
+
+      const direction = delta > 0 ? 1 : -1;
+      context.directionDistance = direction === context.direction
+        ? context.directionDistance + delta
+        : delta;
+      context.direction = direction;
+
+      if (context.directionDistance >= 10) {
+        headerOffset.value = withTiming(68, { duration: 110 });
+        context.directionDistance = 0;
+      } else if (context.directionDistance <= -8) {
+        headerOffset.value = withTiming(0, { duration: 120 });
+        context.directionDistance = 0;
+      }
+    },
+    onEndDrag: (event) => {
+      if (!shouldAnimateHeader || event.contentOffset.y > 8) return;
+      headerOffset.value = withTiming(0, { duration: 120 });
     },
   });
   const headerAnimatedStyle = useAnimatedStyle(() => ({
@@ -1028,8 +1106,15 @@ export default function App() {
   }, []);
 
   const playSong = useCallback(
-    async (song) => {
+    async (song, rememberHistory = true) => {
       try {
+        if (rememberHistory && song) {
+          const history = playbackHistoryRef.current;
+          if (history[history.length - 1] !== song.id) {
+            history.push(song.id);
+            if (history.length > 100) history.shift();
+          }
+        }
         let player = soundRef.current;
         if (player) {
           player.pause();
@@ -1105,7 +1190,19 @@ export default function App() {
       if (!queue.length) return;
       const index = queue.findIndex((song) => song.id === currentSong?.id);
       let nextIndex;
-      if (settingsRef.current.shuffle && queue.length > 1) {
+      if (direction < 0 && settingsRef.current.shuffle && queue.length > 1) {
+        const history = playbackHistoryRef.current;
+        if (history.length > 1 && history[history.length - 1] === currentSong?.id) {
+          history.pop();
+        }
+        const previousId = history[history.length - 1];
+        const previousSong = queue.find((song) => song.id === previousId);
+        if (previousSong) {
+          await playSong(previousSong, false);
+          return;
+        }
+      }
+      if (settingsRef.current.shuffle && queue.length > 1 && direction > 0) {
         do {
           nextIndex = Math.floor(Math.random() * queue.length);
         } while (nextIndex === index);
@@ -1117,6 +1214,15 @@ export default function App() {
     },
     [currentSong, playSong],
   );
+
+  useEffect(() => {
+    if (!NativeModules.ExpoAudio) return undefined;
+    const emitter = new NativeEventEmitter(NativeModules.ExpoAudio);
+    const subscription = emitter.addListener("onAudioControl", ({ direction }) => {
+      skipSong(direction === "previous" ? -1 : 1);
+    });
+    return () => subscription.remove();
+  }, [skipSong]);
 
   const setPlayerSetting = useCallback((key, value) => {
     setSettings((previous) => {
