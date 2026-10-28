@@ -919,40 +919,20 @@ export default function App() {
   const headerScrollHandler = useAnimatedScrollHandler({
     onBeginDrag: (event, context) => {
       context.previousY = event.contentOffset.y;
-      context.directionDistance = 0;
-      context.direction = 0;
     },
     onScroll: (event, context) => {
       if (!shouldAnimateHeader) return;
 
       const currentY = event.contentOffset.y;
-      if (currentY <= 8) {
-        context.previousY = currentY;
-        headerOffset.value = withTiming(0, { duration: 90 });
-        return;
+      if (currentY <= 0) {
+        headerOffset.set(0);
+      } else {
+        const delta = currentY - context.previousY;
+        headerOffset.set(
+          Math.min(Math.max(headerOffset.value + delta, 0), 68),
+        );
       }
-
-      const delta = currentY - context.previousY;
       context.previousY = currentY;
-      if (Math.abs(delta) < 2) return;
-
-      const direction = delta > 0 ? 1 : -1;
-      context.directionDistance = direction === context.direction
-        ? context.directionDistance + delta
-        : delta;
-      context.direction = direction;
-
-      if (context.directionDistance >= 10) {
-        headerOffset.value = withTiming(68, { duration: 110 });
-        context.directionDistance = 0;
-      } else if (context.directionDistance <= -8) {
-        headerOffset.value = withTiming(0, { duration: 120 });
-        context.directionDistance = 0;
-      }
-    },
-    onEndDrag: (event) => {
-      if (!shouldAnimateHeader || event.contentOffset.y > 8) return;
-      headerOffset.value = withTiming(0, { duration: 120 });
     },
   });
   const headerAnimatedStyle = useAnimatedStyle(() => ({
