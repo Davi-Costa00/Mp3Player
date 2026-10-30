@@ -20,7 +20,6 @@ import * as DocumentPicker from "expo-document-picker";
 import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import Animated, {
-  useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -151,9 +150,9 @@ function createStyles(colors) {
     webShell: { width: "100%", maxWidth: 760, alignSelf: "center" },
     headerContainer: { overflow: "hidden" },
     header: {
-      minHeight: 68,
-      paddingHorizontal: 20,
-      paddingVertical: 12,
+      minHeight: 34,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
       backgroundColor: colors.header,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.border,
@@ -161,23 +160,24 @@ function createStyles(colors) {
       alignItems: "center",
       justifyContent: "space-between",
     },
-    brand: { flexDirection: "row", alignItems: "center", gap: 12 },
+    brand: { flexDirection: "row", alignItems: "center", gap: 6 },
     brandMark: {
-      width: 42,
-      height: 42,
-      borderRadius: 14,
+      width: 21,
+      height: 21,
+      borderRadius: 7,
       backgroundColor: colors.accent,
       alignItems: "center",
       justifyContent: "center",
     },
-    brandTitle: { color: colors.text, fontSize: 20, fontWeight: "700" },
+    brandTitle: { color: colors.text, fontSize: 10, fontWeight: "700" },
     headerButton: {
       width: 42,
       height: 42,
+      marginVertical: -10,
       borderRadius: 14,
       alignItems: "center",
       justifyContent: "center",
-      backgroundColor: colors.surfaceRaised,
+      backgroundColor: "transparent",
     },
     content: { padding: 20, paddingBottom: 28, gap: 18 },
     intro: { gap: 6, marginBottom: 2 },
@@ -432,7 +432,6 @@ const PlaylistItem = React.memo(function PlaylistItem({
   onOpenPlaylist,
   onRenamePlaylist,
   onRemovePlaylist,
-  onScroll,
 }) {
   const isBuiltIn = playlist.id === "all" || playlist.id === "recent";
   const pressScale = useSharedValue(1);
@@ -635,7 +634,6 @@ const PlaylistLibrary = React.memo(function PlaylistLibrary({
   onRemoveSong,
   onRenamePlaylist,
   onRemovePlaylist,
-  onScroll,
 }) {
   const playlistItems = useMemo(
     () => [...BUILT_IN_PLAYLISTS, ...playlists],
@@ -792,8 +790,6 @@ const PlaylistLibrary = React.memo(function PlaylistLibrary({
       alwaysBounceVertical={Platform.OS === "ios"}
       overScrollMode={Platform.OS === "android" ? "always" : "never"}
       decelerationRate={Platform.OS === "android" ? 0.985 : "normal"}
-      onScroll={onScroll}
-      scrollEventThrottle={16}
     />
   );
 });
@@ -914,33 +910,6 @@ export default function App() {
     [settings.lightMode],
   );
   const colors = settings.lightMode ? LIGHT : DARK;
-  const headerOffset = useSharedValue(0);
-  const shouldAnimateHeader = Platform.OS !== "web";
-  const headerScrollHandler = useAnimatedScrollHandler({
-    onBeginDrag: (event, context) => {
-      context.previousY = event.contentOffset.y;
-    },
-    onScroll: (event, context) => {
-      if (!shouldAnimateHeader) return;
-
-      const currentY = event.contentOffset.y;
-      if (currentY <= 0) {
-        headerOffset.set(0);
-      } else {
-        const delta = currentY - context.previousY;
-        headerOffset.set(
-          Math.min(Math.max(headerOffset.value + delta, 0), 68),
-        );
-      }
-      context.previousY = currentY;
-    },
-  });
-  const headerAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: -headerOffset.value }],
-  }));
-  const headerContainerAnimatedStyle = useAnimatedStyle(() => ({
-    height: Math.max(0, 68 - headerOffset.value),
-  }));
 
   const customPlaylist = useMemo(
     () => playlists.find((playlist) => playlist.id === activePlaylistId) || null,
@@ -1214,16 +1183,14 @@ export default function App() {
   }, []);
 
   const openPlaylist = useCallback((playlistId) => {
-    if (shouldAnimateHeader) headerOffset.set(0);
     setActivePlaylistId(playlistId);
     setStatus("");
-  }, [headerOffset, shouldAnimateHeader]);
+  }, []);
 
   const onBackToPlaylists = useCallback(() => {
-    if (shouldAnimateHeader) headerOffset.set(0);
     setActivePlaylistId(null);
     setStatus("");
-  }, [headerOffset, shouldAnimateHeader]);
+  }, []);
 
   const onRenamePlaylist = useCallback((playlist) => {
     setNameInput(playlist.name);
@@ -1508,13 +1475,11 @@ export default function App() {
         backgroundColor={colors.header}
       />
       <View style={[styles.screen, Platform.OS === "web" && styles.webShell]}>
-        <Animated.View
-          style={[styles.headerContainer, headerContainerAnimatedStyle]}
-        >
-          <Animated.View style={[styles.header, headerAnimatedStyle]}>
+        <View style={styles.headerContainer}>
+          <View style={styles.header}>
             <View style={styles.brand}>
               <View style={styles.brandMark}>
-                <Ionicons name="musical-notes" size={22} color="#fff" />
+                <Ionicons name="musical-notes" size={11} color="#fff" />
               </View>
               <Text style={styles.brandTitle}>Mp3Player</Text>
             </View>
@@ -1522,11 +1487,12 @@ export default function App() {
               accessibilityLabel="Abrir configurações"
               onPress={() => setSettingsOpen(true)}
               style={styles.headerButton}
+              hitSlop={0}
             >
-              <Ionicons name="settings-outline" size={22} color={colors.text} />
+              <Ionicons name="settings-outline" size={11} color={colors.text} />
             </Pressable>
-          </Animated.View>
-        </Animated.View>
+          </View>
+        </View>
 
         <PlaylistLibrary
           activePlaylistId={activePlaylistId}
@@ -1548,7 +1514,6 @@ export default function App() {
           onRemoveSong={removeSong}
           onRenamePlaylist={onRenamePlaylist}
           onRemovePlaylist={removePlaylist}
-          onScroll={headerScrollHandler}
         />
 
         {!!status && <Text accessibilityRole="alert" style={styles.status}>{status}</Text>}
